@@ -494,3 +494,91 @@ int main(int argc, char** argv)
   ASSERT_TRUE(result.success) << "Compilation failed: " << result.stderr_output;
   EXPECT_EQ(result.exit_code, 42);
 }
+
+TEST(BasicCodeGeneration, StructWithDefaultAddPreservesBackwardCompat) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  auto &s = code.Add<cppgen::Struct>("Point");
+  s.Add<cppgen::Variable>("int", "x");
+  s.Add<cppgen::Variable>("int", "y");
+  auto result_str =
+      // clang-format off
+R"(
+struct Point {
+  int x;
+  int y;
+}; // struct Point
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, StructWithAccessSections) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  auto &s = code.Add<cppgen::Struct>("Node");
+  s.AddPublic().Add<cppgen::Variable>("int", "value");
+  s.AddPrivate().Add<cppgen::Variable>("int", "m_internal");
+  auto result_str =
+      // clang-format off
+R"(
+struct Node {
+public:
+  int value;
+private:
+  int m_internal;
+}; // struct Node
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, ClassWithAccessSections) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  auto &cls = code.Add<cppgen::Class>("Renderer");
+  cls.AddPublic().Add<cppgen::Function>("void", "Draw");
+  auto &priv = cls.AddPrivate();
+  priv.Add<cppgen::Variable>("int", "m_width");
+  priv.Add<cppgen::Variable>("int", "m_height");
+  auto result_str =
+      // clang-format off
+R"(
+class Renderer {
+public:
+  void Draw()
+  {
+  }
+private:
+  int m_width;
+  int m_height;
+}; // class Renderer
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, ClassDefaultAndNamedSectionsMix) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  auto &cls = code.Add<cppgen::Class>("Timer");
+  // default Add<> (no label) followed by named sections
+  cls.Add<cppgen::Variable>("static int", "s_count");
+  cls.AddPublic().Add<cppgen::Function>("void", "Start");
+  cls.AddPrivate().Add<cppgen::Variable>("int", "m_ms");
+  auto result_str =
+      // clang-format off
+R"(
+class Timer {
+  static int s_count;
+public:
+  void Start()
+  {
+  }
+private:
+  int m_ms;
+}; // class Timer
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}

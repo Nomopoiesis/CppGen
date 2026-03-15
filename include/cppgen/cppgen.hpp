@@ -269,16 +269,6 @@ private:
   std::optional<InitializerList> m_array_initializer;
 };
 
-// --- Struct ---
-class Struct : public CodeBlock {
-public:
-  Struct(const std::string &name) : m_name(name) {}
-  virtual ~Struct() = default;
-  auto Emit(CodeWriter &writer) -> std::string override;
-
-private:
-  std::string m_name;
-};
 
 // --- Function ---
 class Function : public CodeBlock {
@@ -322,6 +312,105 @@ private:
   std::string m_return_type;
   std::vector<std::string> m_specifiers;
   std::vector<ParameterDeclaration> m_parameters;
+};
+
+// --- Access specifier ---
+enum class Access { Public, Private, Protected };
+
+// --- Class member types ---
+// All types valid as direct members of a struct/class.
+// Extend by adding new variant alternatives and is_class_member specialisations.
+using MemberVariant =
+    std::variant<std::unique_ptr<Variable>, std::unique_ptr<ArrayVariable>,
+                 std::unique_ptr<Function>>;
+
+template <typename T>
+inline constexpr bool is_class_member_v =
+    std::disjunction_v<std::is_same<T, Variable>,
+                       std::is_same<T, ArrayVariable>,
+                       std::is_same<T, Function>>;
+
+// --- MemberSection ---
+// A typed, optionally-labelled group of class/struct members.
+class MemberSection {
+public:
+  MemberSection() = default;
+  MemberSection(MemberSection &&) = default;
+  MemberSection &operator=(MemberSection &&) = default;
+  MemberSection(const MemberSection &) = delete;
+  MemberSection &operator=(const MemberSection &) = delete;
+
+  template <typename T, typename... Args>
+  auto Add(Args &&...args) -> T & {
+    static_assert(is_class_member_v<T>, "T is not a valid class/struct member");
+    auto ptr = std::make_unique<T>(std::forward<Args>(args)...);
+    T &ref = *ptr;
+    m_members.emplace_back(std::move(ptr));
+    return ref;
+  }
+
+  auto IsEmpty() const -> bool { return m_members.empty(); }
+  auto Emit(CodeWriter &writer) -> void;
+
+private:
+  std::vector<MemberVariant> m_members;
+};
+
+// --- AggregateType (base for Struct and Class) ---
+class AggregateType : public CodeElement {
+public:
+  AggregateType(const std::string &name) : m_name(name) {}
+  AggregateType(const AggregateType &) = delete;
+  AggregateType &operator=(const AggregateType &) = delete;
+  virtual ~AggregateType() = default;
+
+  // Convenience Add<T>() — goes into the implicit default section (no label).
+  // Preserves backward-compatible usage of Struct.
+  template <typename T, typename... Args>
+  auto Add(Args &&...args) -> T & {
+    return m_default_section.Add<T>(std::forward<Args>(args)...);
+  }
+
+  auto AddPublic() -> MemberSection & { return AddSection(Access::Public); }
+  auto AddPrivate() -> MemberSection & { return AddSection(Access::Private); }
+  auto AddProtected() -> MemberSection & {
+    return AddSection(Access::Protected);
+  }
+
+  auto Emit(CodeWriter &writer) -> std::string override;
+
+protected:
+  virtual auto GetKeyword() const -> std::string_view = 0;
+
+private:
+  auto AddSection(Access access) -> MemberSection & {
+    m_sections.emplace_back(access, std::make_unique<MemberSection>());
+    return *m_sections.back().second;
+  }
+
+  std::string m_name;
+  MemberSection m_default_section;
+  std::vector<std::pair<Access, std::unique_ptr<MemberSection>>> m_sections;
+};
+
+// --- Struct ---
+class Struct : public AggregateType {
+public:
+  Struct(const std::string &name) : AggregateType(name) {}
+  virtual ~Struct() = default;
+
+protected:
+  auto GetKeyword() const -> std::string_view override { return "struct"; }
+};
+
+// --- Class ---
+class Class : public AggregateType {
+public:
+  Class(const std::string &name) : AggregateType(name) {}
+  virtual ~Class() = default;
+
+protected:
+  auto GetKeyword() const -> std::string_view override { return "class"; }
 };
 
 // =============================================================================
@@ -470,14 +559,35 @@ inline auto ArrayVariable::Emit(CodeWriter &writer) -> std::string {
   return m_name;
 }
 
-inline auto Struct::Emit(CodeWriter &writer) -> std::string {
-  writer.WriteLine("struct " + m_name + " {");
+inline auto MemberSection::Emit(CodeWriter &writer) -> void {
+  for (auto &member : m_members) {
+    std::visit([&writer](auto &ptr) { ptr->Emit(writer); }, member);
+  }
+}
+
+inline auto AggregateType::Emit(CodeWriter &writer) -> std::string {
+  std::string kw(GetKeyword());
+  writer.WriteLine(kw + " " + m_name + " {");
   writer.IdentIn();
-  for (const auto &element : elements_) {
-    element->Emit(writer);
+  m_default_section.Emit(writer);
+  for (auto &[access, section] : m_sections) {
+    writer.IdentOut();
+    switch (access) {
+    case Access::Public:
+      writer.WriteLine("public:");
+      break;
+    case Access::Private:
+      writer.WriteLine("private:");
+      break;
+    case Access::Protected:
+      writer.WriteLine("protected:");
+      break;
+    }
+    writer.IdentIn();
+    section->Emit(writer);
   }
   writer.IdentOut();
-  writer.WriteLine("}; // struct " + m_name);
+  writer.WriteLine("}; // " + kw + " " + m_name);
   return m_name;
 }
 

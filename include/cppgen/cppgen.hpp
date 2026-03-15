@@ -20,6 +20,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace cppgen {
@@ -29,21 +30,57 @@ class CodeWriter {
 public:
   virtual ~CodeWriter() = default;
 
+  auto SetMaxLineLength(int max_length) -> void {
+    m_max_line_length = max_length;
+  }
+  auto GetMaxLineLength() const -> int { return m_max_line_length; }
+  auto GetCurrentLineLength() const -> int { return m_current_line_length; }
+
   template <bool indent = true>
   auto Write(std::string_view text) -> void {
     if constexpr (indent) {
-      for (int i = 0; i < m_indent_level; ++i) {
-        m_output << "  ";
+      if (m_current_line_length == 0) {
+        for (int i = 0; i < m_indent_level; ++i) {
+          m_output << "  ";
+          m_current_line_length += 2;
+        }
       }
     }
     m_output << text;
+    auto last_nl = text.rfind('\n');
+    if (last_nl == std::string_view::npos) {
+      m_current_line_length += static_cast<int>(text.size());
+    } else {
+      m_current_line_length = static_cast<int>(text.size() - (last_nl + 1));
+    }
   }
 
-  auto NewLine() -> void { m_output << "\n"; }
+  auto NewLine() -> void {
+    m_output << "\n";
+    m_current_line_length = 0;
+  }
 
   auto WriteLine(std::string_view text) -> void {
     Write(text);
     NewLine();
+  }
+
+  /** If adding \a extra_chars would exceed max line length, emit newline and
+   * indent so the next Write starts on a fresh line. No-op if max line length
+   * is 0 (unlimited). */
+  auto MaybeWrap(int extra_chars) -> void {
+    if (m_max_line_length <= 0)
+      return;
+    if (m_current_line_length + extra_chars > m_max_line_length &&
+        m_current_line_length > 0) {
+      NewLine();
+      if (m_indent_level > 0) {
+        for (int i = 0; i < m_indent_level; ++i) {
+          m_output << "  ";
+          m_current_line_length += 2;
+        }
+      }
+    }
   }
 
   auto IdentIn() -> void { ++m_indent_level; }
@@ -55,10 +92,13 @@ public:
     m_output.str("");
     m_output.clear();
     m_indent_level = 0;
+    m_current_line_length = 0;
   }
 
 private:
   int m_indent_level = 0;
+  int m_current_line_length = 0;
+  int m_max_line_length = 80;
   std::stringstream m_output;
 };
 
@@ -93,6 +133,9 @@ public:
   CodeUnit() = default;
   virtual ~CodeUnit() = default;
 
+  auto SetMaxLineLength(int max_length) -> void {
+    m_writer.SetMaxLineLength(max_length);
+  }
   auto EmitCode() -> std::string { return Emit(m_writer); }
 
 private:
@@ -149,6 +192,30 @@ private:
   std::string m_name;
 };
 
+// --- Initializer list ---
+using InitializerListValue = std::pair<std::optional<std::string>, std::string>;
+
+class InitializerList : public CodeElement {
+public:
+  InitializerList() = default;
+  virtual ~InitializerList() = default;
+  auto Emit(CodeWriter &writer) -> std::string override;
+
+  auto AddValue(const std::string &value) -> InitializerList &;
+  auto AddValue(const std::string &name, const std::string &value)
+      -> InitializerList &;
+  auto AddValue(InitializerList list) -> InitializerList &;
+
+  auto SetCompact(bool compact = true) -> InitializerList & {
+    m_compact = compact;
+    return *this;
+  }
+
+private:
+  std::vector<std::variant<InitializerListValue, InitializerList>> m_entries;
+  bool m_compact = false;
+};
+
 // --- Variable ---
 class Variable : public CodeElement {
 public:
@@ -157,15 +224,41 @@ public:
   virtual ~Variable() = default;
   auto Emit(CodeWriter &writer) -> std::string override;
 
+  auto AddSpecifier(const std::string &specifier) -> Variable & {
+    m_specifiers.push_back(specifier);
+    return *this;
+  }
   auto SetInitializer(const std::string &initializer) -> Variable & {
     m_initializer = initializer;
     return *this;
   }
 
-private:
+protected:
   std::string m_type;
   std::string m_name;
+  std::vector<std::string> m_specifiers;
+
+private:
   std::optional<std::string> m_initializer;
+};
+
+// --- ArrayVariable (derived from Variable) ---
+class ArrayVariable : public Variable {
+public:
+  ArrayVariable(const std::string &type, const std::string &name)
+      : Variable(type, name) {}
+  virtual ~ArrayVariable() = default;
+  auto Emit(CodeWriter &writer) -> std::string override;
+
+  auto AddSpecifier(const std::string &specifier) -> ArrayVariable & {
+    Variable::AddSpecifier(specifier);
+    return *this;
+  }
+  auto SetInitializer(const std::string &initializer) -> ArrayVariable &;
+  auto SetInitializer(InitializerList list) -> ArrayVariable &;
+
+private:
+  std::optional<InitializerList> m_array_initializer;
 };
 
 // --- Struct ---
@@ -206,6 +299,10 @@ public:
   virtual ~Function() = default;
   auto Emit(CodeWriter &writer) -> std::string override;
 
+  auto AddSpecifier(const std::string &specifier) -> Function & {
+    m_specifiers.push_back(specifier);
+    return *this;
+  }
   auto AddParameter(const std::string &type, const std::string &name)
       -> ParameterDeclaration & {
     m_parameters.emplace_back(type, name);
@@ -215,6 +312,7 @@ public:
 private:
   std::string m_name;
   std::string m_return_type;
+  std::vector<std::string> m_specifiers;
   std::vector<ParameterDeclaration> m_parameters;
 };
 
@@ -250,14 +348,110 @@ inline auto Namespace::Emit(CodeWriter &writer) -> std::string {
   return m_name;
 }
 
+inline auto InitializerList::Emit(CodeWriter &writer) -> std::string {
+  if (m_compact) {
+    writer.Write<false>("{");
+  } else {
+    writer.Write<false>("{\n");
+    writer.IdentIn();
+  }
+  for (size_t i = 0; i < m_entries.size(); ++i) {
+    const bool is_last = (i == m_entries.size() - 1);
+    std::visit(
+        [&writer, is_last](auto &&arg) {
+          using T = std::decay_t<decltype(arg)>;
+          if constexpr (std::is_same_v<T, InitializerListValue>) {
+            std::string chunk =
+                arg.first ? "." + *arg.first + " = " + arg.second : arg.second;
+            if (!is_last)
+              chunk += ", ";
+            int need = static_cast<int>(chunk.size());
+            writer.MaybeWrap(need);
+            if (arg.first) {
+              writer.Write(".");
+              writer.Write(*arg.first + " = ");
+            }
+            writer.Write(arg.second);
+            if (!is_last)
+              writer.Write(", ");
+          } else if constexpr (std::is_same_v<T, InitializerList>) {
+            int need = 2;
+            if (!is_last)
+              need += 2;
+            writer.MaybeWrap(need);
+            arg.Emit(writer);
+            if (!is_last)
+              writer.Write<false>(", ");
+          }
+        },
+        m_entries[i]);
+  }
+  if (m_compact) {
+    writer.Write<false>("}");
+  } else {
+    writer.IdentOut();
+    writer.Write<false>("\n}");
+  }
+  return "";
+}
+
+inline auto InitializerList::AddValue(const std::string &value)
+    -> InitializerList & {
+  m_entries.emplace_back(InitializerListValue{std::nullopt, value});
+  return *this;
+}
+
+inline auto InitializerList::AddValue(const std::string &name,
+                                      const std::string &value)
+    -> InitializerList & {
+  m_entries.emplace_back(InitializerListValue{std::optional{name}, value});
+  return *this;
+}
+
+inline auto InitializerList::AddValue(InitializerList list)
+    -> InitializerList & {
+  m_entries.emplace_back(std::move(list));
+  return *this;
+}
+
 inline auto Variable::Emit(CodeWriter &writer) -> std::string {
   std::stringstream ss;
+  for (const auto &s : m_specifiers) {
+    ss << s << " ";
+  }
   ss << m_type << " " << m_name;
   if (m_initializer) {
     ss << " = " << *m_initializer;
   }
   ss << ";";
   writer.WriteLine(ss.str());
+  return m_name;
+}
+
+inline auto ArrayVariable::SetInitializer(const std::string &initializer)
+    -> ArrayVariable & {
+  InitializerList list;
+  list.AddValue(initializer);
+  m_array_initializer = std::move(list);
+  return *this;
+}
+
+inline auto ArrayVariable::SetInitializer(InitializerList list)
+    -> ArrayVariable & {
+  m_array_initializer = std::move(list);
+  return *this;
+}
+
+inline auto ArrayVariable::Emit(CodeWriter &writer) -> std::string {
+  for (const auto &s : m_specifiers) {
+    writer.Write<false>(s + " ");
+  }
+  writer.Write<false>(m_type + " " + m_name + "[]");
+  if (m_array_initializer) {
+    writer.Write<false>(" = ");
+    m_array_initializer->Emit(writer);
+  }
+  writer.WriteLine(";");
   return m_name;
 }
 
@@ -282,6 +476,9 @@ inline auto Function::ParameterDeclaration::Emit(CodeWriter &writer)
 }
 
 inline auto Function::Emit(CodeWriter &writer) -> std::string {
+  for (const auto &s : m_specifiers) {
+    writer.Write<false>(s + " ");
+  }
   writer.Write(m_return_type + " " + m_name + "(");
   size_t parameter_count = m_parameters.size();
   for (size_t i = 0; i < parameter_count; ++i) {

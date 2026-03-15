@@ -130,6 +130,243 @@ struct MyStruct {
   EXPECT_EQ(code.EmitCode(), result_str);
 }
 
+TEST(BasicCodeGeneration, ArrayVariableWithoutInitializer) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  code.Add<cppgen::ArrayVariable>("int", "arr");
+  auto result_str =
+      // clang-format off
+R"(
+int arr[];
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, ArrayVariableWithInitializerList) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  cppgen::InitializerList list;
+  list.AddValue("1").AddValue("2").AddValue("3");
+  code.Add<cppgen::ArrayVariable>("int", "arr").SetInitializer(std::move(list));
+  auto result_str =
+      // clang-format off
+R"(
+int arr[] = {
+  1, 2, 3
+};
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, ArrayVariableWithCompactInitializerList) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  cppgen::InitializerList list;
+  list.AddValue("1").AddValue("2").AddValue("3").SetCompact(true);
+  code.Add<cppgen::ArrayVariable>("int", "arr").SetInitializer(std::move(list));
+  auto result_str =
+      // clang-format off
+R"(
+int arr[] = {1, 2, 3};
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, ArrayVariableWithCompactNamedInitializerList) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  cppgen::InitializerList list;
+  list.AddValue("x", "1").AddValue("y", "2").SetCompact(true);
+  code.Add<cppgen::ArrayVariable>("Point", "pt")
+      .SetInitializer(std::move(list));
+  auto result_str =
+      // clang-format off
+R"(
+Point pt[] = {.x = 1, .y = 2};
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, ArrayVariableWithInitializerListWrapsWhenLong) {
+  cppgen::CodeUnit code;
+  code.SetMaxLineLength(10);
+  code.Add<cppgen::NewLine>();
+  cppgen::InitializerList list;
+  list.AddValue("1").AddValue("2").AddValue("3").AddValue("4").AddValue("5");
+  code.Add<cppgen::ArrayVariable>("int", "arr").SetInitializer(std::move(list));
+  auto result_str =
+      // clang-format off
+R"(
+int arr[] = {
+  1, 2, 
+  3, 4, 5
+};
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, ArrayVariableWithNamedInitializerList) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  cppgen::InitializerList list;
+  list.AddValue("x", "1").AddValue("y", "2").AddValue("z", "3");
+  code.Add<cppgen::ArrayVariable>("Point", "pt")
+      .SetInitializer(std::move(list));
+  auto result_str =
+      // clang-format off
+R"(
+Point pt[] = {
+  .x = 1, .y = 2, .z = 3
+};
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, ArrayVariableWithMixedInitializerList) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  cppgen::InitializerList list;
+  list.AddValue("0").AddValue("width", "100").AddValue("height", "50");
+  code.Add<cppgen::ArrayVariable>("Config", "cfg")
+      .SetInitializer(std::move(list));
+  auto result_str =
+      // clang-format off
+R"(
+Config cfg[] = {
+  0, .width = 100, .height = 50
+};
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, ArrayVariableWithStringInitializer) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  code.Add<cppgen::ArrayVariable>("int", "arr").SetInitializer("{1, 2, 3}");
+  auto result_str =
+      // clang-format off
+R"(
+int arr[] = {
+  {1, 2, 3}
+};
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, ArrayVariableWithNamedInitializerListWrapsWhenLong) {
+  cppgen::CodeUnit code;
+  code.SetMaxLineLength(22);
+  code.Add<cppgen::NewLine>();
+  cppgen::InitializerList list;
+  list.AddValue("x", "1").AddValue("y", "2").AddValue("z", "3");
+  code.Add<cppgen::ArrayVariable>("Point", "pt")
+      .SetInitializer(std::move(list));
+  auto result_str =
+      // clang-format off
+R"(
+Point pt[] = {
+  .x = 1, .y = 2, 
+  .z = 3
+};
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, VariableWithSpecifiers) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  code.Add<cppgen::Variable>("int", "x")
+      .AddSpecifier("static")
+      .AddSpecifier("constexpr")
+      .SetInitializer("0");
+  auto result_str =
+      // clang-format off
+R"(
+static constexpr int x = 0;
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, ArrayVariableWithSpecifiers) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  cppgen::InitializerList list;
+  list.AddValue("1").AddValue("2").AddValue("3");
+  code.Add<cppgen::ArrayVariable>("int", "arr")
+      .AddSpecifier("constexpr")
+      .SetInitializer(std::move(list));
+  auto result_str =
+      // clang-format off
+R"(
+constexpr int arr[] = {
+  1, 2, 3
+};
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, FunctionWithSpecifiers) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  auto &function = code.Add<cppgen::Function>("void", "f");
+  function.AddSpecifier("inline").AddSpecifier("static");
+  function.Add<cppgen::RawText>("return;");
+  auto result_str =
+      // clang-format off
+R"(
+inline static void f()
+{
+  return;
+}
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, ArrayOfStructWithMixedInitializers) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  auto &struct_point = code.Add<cppgen::Struct>("Point");
+  struct_point.Add<cppgen::Variable>("int", "x");
+  struct_point.Add<cppgen::Variable>("int", "y");
+  code.Add<cppgen::NewLine>();
+  cppgen::InitializerList second_elem;
+  second_elem.AddValue("x", "10").AddValue("y", "20").SetCompact(true);
+  cppgen::InitializerList third_elem;
+  third_elem.AddValue("15").AddValue("25").SetCompact(true);
+  cppgen::InitializerList list;
+  list.AddValue("{ 1, 2 }"); // first element: positional struct init
+  list.AddValue(std::move(second_elem)); // second: named in nested list
+  list.AddValue(std::move(third_elem));  // third: positional in nested list
+  code.Add<cppgen::ArrayVariable>("Point", "pts")
+      .SetInitializer(std::move(list));
+  auto result_str =
+      // clang-format off
+R"(
+struct Point {
+  int x;
+  int y;
+}; // struct Point
+
+Point pts[] = {
+  { 1, 2 }, {.x = 10, .y = 20}, {15, 25}
+};
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
 TEST(BasicCodeGeneration, SimpleFunction) {
   cppgen::CodeUnit code;
   code.Add<cppgen::NewLine>();

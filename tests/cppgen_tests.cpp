@@ -311,8 +311,7 @@ TEST(BasicCodeGeneration, VariableWithSpecifiers) {
   cppgen::CodeUnit code;
   code.Add<cppgen::NewLine>();
   code.Add<cppgen::Variable>("int", "x")
-      .AddSpecifier("static")
-      .AddSpecifier("constexpr")
+      .AddSpecifiers("static", "constexpr")
       .SetInitializer("0");
   auto result_str =
       // clang-format off
@@ -329,7 +328,7 @@ TEST(BasicCodeGeneration, ArrayVariableWithSpecifiers) {
   cppgen::InitializerList list;
   list.AddValue("1").AddValue("2").AddValue("3");
   code.Add<cppgen::ArrayVariable>("int", "arr")
-      .AddSpecifier("constexpr")
+      .AddSpecifiers("constexpr")
       .SetInitializer(std::move(list));
   auto result_str =
       // clang-format off
@@ -346,7 +345,7 @@ TEST(BasicCodeGeneration, FunctionWithSpecifiers) {
   cppgen::CodeUnit code;
   code.Add<cppgen::NewLine>();
   auto &function = code.Add<cppgen::Function>("void", "f");
-  function.AddSpecifier("inline").AddSpecifier("static");
+  function.AddSpecifiers("inline", "static");
   function.Add<cppgen::RawText>("return;");
   auto result_str =
       // clang-format off
@@ -367,14 +366,10 @@ TEST(BasicCodeGeneration, ArrayOfStructWithMixedInitializers) {
   struct_point.Add<cppgen::Variable>("int", "x");
   struct_point.Add<cppgen::Variable>("int", "y");
   code.Add<cppgen::NewLine>();
-  cppgen::InitializerList second_elem;
-  second_elem.AddValue("x", "10").AddValue("y", "20").SetCompact(true);
-  cppgen::InitializerList third_elem;
-  third_elem.AddValue("15").AddValue("25").SetCompact(true);
   cppgen::InitializerList list;
   list.AddValue("{ 1, 2 }"); // first element: positional struct init
-  list.AddValue(std::move(second_elem)); // second: named in nested list
-  list.AddValue(std::move(third_elem));  // third: positional in nested list
+  list.AddEntry().AddValue("x", "10").AddValue("y", "20"); // named fields
+  list.AddEntry().AddValue("15").AddValue("25");           // positional
   code.Add<cppgen::ArrayVariable>("Point", "pts")
       .SetInitializer(std::move(list));
   auto result_str =
@@ -648,6 +643,81 @@ private:
   EXPECT_EQ(code.EmitCode(), result_str);
 }
 
+TEST(BasicCodeGeneration, AddSpecifiersVariadic) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  code.Add<cppgen::Variable>("int", "x")
+      .AddSpecifiers("static", "constexpr")
+      .SetInitializer("42");
+  code.Add<cppgen::NewLine>();
+  auto &fn = code.Add<cppgen::Function>("void", "f");
+  fn.AddSpecifiers("inline", "static");
+  fn.Add<cppgen::RawText>("return;");
+  auto result_str =
+      // clang-format off
+R"(
+static constexpr int x = 42;
+
+inline static void f()
+{
+  return;
+}
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, AddPublicGetOrCreate) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  auto &cls = code.Add<cppgen::Class>("Foo");
+  cls.AddPublic().Add<cppgen::Variable>("int", "x");
+  cls.AddPublic().Add<cppgen::Variable>("int", "y"); // reuses existing section
+  auto result_str =
+      // clang-format off
+R"(
+class Foo {
+public:
+  int x;
+  int y;
+}; // class Foo
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, ArrayVariableAddEntry) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  auto &arr = code.Add<cppgen::ArrayVariable>("int", "vals");
+  arr.AddEntry().AddValue("1").AddValue("2");
+  arr.AddEntry().AddValue("3").AddValue("4");
+  auto result_str =
+      // clang-format off
+R"(
+int vals[] = {
+  {1, 2}, {3, 4}
+};
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, VariableWithListInitializer) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  cppgen::InitializerList list;
+  list.AddValue("x", "1").AddValue("y", "2").SetCompact(true);
+  code.Add<cppgen::Variable>("Point", "p").SetInitializer(std::move(list));
+  auto result_str =
+      // clang-format off
+R"(
+Point p = {.x = 1, .y = 2};
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
 // =============================================================================
 // Integration tests — generate a full program, compile it, and run it.
 // =============================================================================
@@ -735,28 +805,18 @@ TEST(IntegrationTest, BindingTable) {
   binding_info.Add<cppgen::Variable>("uint32_t", "block_size");
   code.Add<cppgen::NewLine>();
 
-  cppgen::InitializerList e0;
-  e0.SetCompact(true)
+  auto &arr = code.Add<cppgen::ArrayVariable>("BindingInfo", "kBindings");
+  arr.AddSpecifiers("static", "constexpr");
+  arr.AddEntry()
       .AddValue("set", "0")
       .AddValue("binding", "20")
       .AddValue("type", "BindingType::UniformBuffer")
       .AddValue("block_size", "64");
-
-  cppgen::InitializerList e1;
-  e1.SetCompact(true)
+  arr.AddEntry()
       .AddValue("set", "0")
       .AddValue("binding", "22")
       .AddValue("type", "BindingType::Sampler")
       .AddValue("block_size", "0");
-
-  cppgen::InitializerList entries;
-  entries.AddValue(std::move(e0));
-  entries.AddValue(std::move(e1));
-
-  code.Add<cppgen::ArrayVariable>("BindingInfo", "kBindings")
-      .AddSpecifier("static")
-      .AddSpecifier("constexpr")
-      .SetInitializer(std::move(entries));
   code.Add<cppgen::NewLine>();
 
   auto &main_fn = code.Add<cppgen::Function>("int", "main");

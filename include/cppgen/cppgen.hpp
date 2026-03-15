@@ -65,7 +65,7 @@ public:
     NewLine();
   }
 
-  /** If adding \a extra_chars would exceed max line length, emit newline and
+  /** If adding extra_chars would exceed max line length, emit newline and
    * indent so the next Write starts on a fresh line. No-op if max line length
    * is 0 (unlimited). */
   auto MaybeWrap(int extra_chars) -> void {
@@ -200,6 +200,10 @@ using InitializerListValue = std::pair<std::optional<std::string>, std::string>;
 class InitializerList : public CodeElement {
 public:
   InitializerList() = default;
+  InitializerList(InitializerList &&) = default;
+  InitializerList &operator=(InitializerList &&) = default;
+  InitializerList(const InitializerList &) = delete;
+  InitializerList &operator=(const InitializerList &) = delete;
   virtual ~InitializerList() = default;
   auto Emit(CodeWriter &writer) -> std::string override;
 
@@ -208,13 +212,24 @@ public:
       -> InitializerList &;
   auto AddValue(InitializerList list) -> InitializerList &;
 
+  // Creates a compact nested list, appends it, returns a stable reference.
+  auto AddEntry() -> InitializerList & {
+    auto ptr = std::make_unique<InitializerList>();
+    ptr->SetCompact(true);
+    InitializerList &ref = *ptr;
+    m_entries.emplace_back(std::move(ptr));
+    return ref;
+  }
+
   auto SetCompact(bool compact = true) -> InitializerList & {
     m_compact = compact;
     return *this;
   }
 
 private:
-  std::vector<std::variant<InitializerListValue, InitializerList>> m_entries;
+  using Entry =
+      std::variant<InitializerListValue, std::unique_ptr<InitializerList>>;
+  std::vector<Entry> m_entries;
   bool m_compact = false;
 };
 
@@ -230,8 +245,17 @@ public:
     m_specifiers.push_back(specifier);
     return *this;
   }
+  template <typename... Specs>
+  auto AddSpecifiers(Specs &&...specs) -> Variable & {
+    (AddSpecifier(std::forward<Specs>(specs)), ...);
+    return *this;
+  }
   auto SetInitializer(const std::string &initializer) -> Variable & {
     m_initializer = initializer;
+    return *this;
+  }
+  auto SetInitializer(InitializerList list) -> Variable & {
+    m_list_initializer = std::move(list);
     return *this;
   }
 
@@ -242,6 +266,7 @@ protected:
 
 private:
   std::optional<std::string> m_initializer;
+  std::optional<InitializerList> m_list_initializer;
 };
 
 // --- ArrayVariable (derived from Variable) ---
@@ -257,12 +282,24 @@ public:
     Variable::AddSpecifier(specifier);
     return *this;
   }
+  template <typename... Specs>
+  auto AddSpecifiers(Specs &&...specs) -> ArrayVariable & {
+    (Variable::AddSpecifier(std::forward<Specs>(specs)), ...);
+    return *this;
+  }
   auto SetSize(std::string size) -> ArrayVariable & {
     m_array_size = std::move(size);
     return *this;
   }
   auto SetInitializer(const std::string &initializer) -> ArrayVariable &;
   auto SetInitializer(InitializerList list) -> ArrayVariable &;
+
+  // Appends a new compact entry to this array's initializer list
+  auto AddEntry() -> InitializerList & {
+    if (!m_array_initializer)
+      m_array_initializer = InitializerList{};
+    return m_array_initializer->AddEntry();
+  }
 
 private:
   std::optional<std::string> m_array_size;
@@ -300,6 +337,11 @@ public:
     m_specifiers.push_back(specifier);
     return *this;
   }
+  template <typename... Specs>
+  auto AddSpecifiers(Specs &&...specs) -> Function & {
+    (AddSpecifier(std::forward<Specs>(specs)), ...);
+    return *this;
+  }
   auto AddParameter(const std::string &type, const std::string &name)
       -> ParameterDeclaration & {
     m_parameters.emplace_back(type, name);
@@ -314,8 +356,8 @@ private:
 };
 
 // --- EnumDecl ---
-// Scoped=true  → "enum class Name : Type { ... };"
-// Scoped=false → "enum Name : Type { ... };"
+// Scoped=true:   "enum class Name : Type { ... };"
+// Scoped=false: "enum Name : Type { ... };"
 // Emit is defined inline because template implementations must be
 // header-visible.
 template <bool Scoped = true>
@@ -373,20 +415,16 @@ enum class Access { Public, Private, Protected };
 
 // --- Class member types ---
 // All types valid as direct members of a struct/class.
-// Extend by adding new variant alternatives and is_class_member
-// specialisations.
 using MemberVariant =
     std::variant<std::unique_ptr<Variable>, std::unique_ptr<ArrayVariable>,
                  std::unique_ptr<Function>, std::unique_ptr<EnumDecl<true>>,
                  std::unique_ptr<EnumDecl<false>>>;
 
 template <typename T>
-inline constexpr bool is_class_member_v =
-    std::disjunction_v<std::is_same<T, Variable>,
-                       std::is_same<T, ArrayVariable>,
-                       std::is_same<T, Function>,
-                       std::is_same<T, EnumDecl<true>>,
-                       std::is_same<T, EnumDecl<false>>>;
+inline constexpr bool is_class_member_v = std::disjunction_v<
+    std::is_same<T, Variable>, std::is_same<T, ArrayVariable>,
+    std::is_same<T, Function>, std::is_same<T, EnumDecl<true>>,
+    std::is_same<T, EnumDecl<false>>>;
 
 // --- MemberSection ---
 // A typed, optionally-labelled group of class/struct members.
@@ -422,8 +460,7 @@ public:
   AggregateType &operator=(const AggregateType &) = delete;
   virtual ~AggregateType() = default;
 
-  // Convenience Add<T>() — goes into the implicit default section (no label).
-  // Preserves backward-compatible usage of Struct.
+  // Convenience Add<T>() goes into the implicit default section.
   template <typename T, typename... Args>
   auto Add(Args &&...args) -> T & {
     return m_default_section.Add<T>(std::forward<Args>(args)...);
@@ -442,6 +479,9 @@ protected:
 
 private:
   auto AddSection(Access access) -> MemberSection & {
+    for (auto &[acc, sec] : m_sections)
+      if (acc == access)
+        return *sec;
     m_sections.emplace_back(access, std::make_unique<MemberSection>());
     return *m_sections.back().second;
   }
@@ -532,12 +572,14 @@ inline auto InitializerList::Emit(CodeWriter &writer) -> std::string {
             writer.Write(arg.second);
             if (!is_last)
               writer.Write(", ");
-          } else if constexpr (std::is_same_v<T, InitializerList>) {
+          } else if constexpr (std::is_same_v<
+                                   T, std::unique_ptr<InitializerList>>) {
             int need = 2;
             if (!is_last)
               need += 2;
             writer.MaybeWrap(need);
-            arg.Emit(writer);
+            writer.Write(""); // apply indent if at start of line
+            arg->Emit(writer);
             if (!is_last)
               writer.Write<false>(", ");
           }
@@ -568,21 +610,24 @@ inline auto InitializerList::AddValue(const std::string &name,
 
 inline auto InitializerList::AddValue(InitializerList list)
     -> InitializerList & {
-  m_entries.emplace_back(std::move(list));
+  m_entries.emplace_back(std::make_unique<InitializerList>(std::move(list)));
   return *this;
 }
 
 inline auto Variable::Emit(CodeWriter &writer) -> std::string {
-  std::stringstream ss;
-  for (const auto &s : m_specifiers) {
-    ss << s << " ";
-  }
-  ss << m_type << " " << m_name;
+  std::string decl;
+  for (const auto &s : m_specifiers)
+    decl += s + " ";
+  decl += m_type + " " + m_name;
   if (m_initializer) {
-    ss << " = " << *m_initializer;
+    writer.WriteLine(decl + " = " + *m_initializer + ";");
+  } else if (m_list_initializer) {
+    writer.Write(decl + " = ");
+    m_list_initializer->Emit(writer);
+    writer.WriteLine(";");
+  } else {
+    writer.WriteLine(decl + ";");
   }
-  ss << ";";
-  writer.WriteLine(ss.str());
   return m_name;
 }
 

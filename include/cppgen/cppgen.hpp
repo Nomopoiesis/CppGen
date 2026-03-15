@@ -173,12 +173,14 @@ private:
 // --- Include ---
 class Include : public CodeElement {
 public:
-  Include(const std::string &include) : m_include(include) {}
+  Include(const std::string &include, bool use_quotes = false)
+      : m_include(include), m_use_quotes(use_quotes) {}
   virtual ~Include() = default;
   auto Emit(CodeWriter &writer) -> std::string override;
 
 private:
   std::string m_include;
+  bool m_use_quotes = false;
 };
 
 // --- Namespace ---
@@ -339,7 +341,10 @@ inline auto RawText::Emit(CodeWriter &writer) -> std::string {
 }
 
 inline auto Include::Emit(CodeWriter &writer) -> std::string {
-  writer.WriteLine("#include <" + m_include + ">");
+  if (m_use_quotes)
+    writer.WriteLine("#include \"" + m_include + "\"");
+  else
+    writer.WriteLine("#include <" + m_include + ">");
   return m_include;
 }
 

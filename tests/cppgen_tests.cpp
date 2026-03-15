@@ -419,6 +419,19 @@ int my_function(int my_int, int my_int2, float my_float, double my_double, char 
   EXPECT_EQ(code.EmitCode(), result_str);
 }
 
+TEST(BasicCodeGeneration, IncludeWithQuotes) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  code.Add<cppgen::Include>("my_header.hpp", true);
+  auto result_str =
+      // clang-format off
+R"(
+#include "my_header.hpp"
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
 TEST(BasicCodeGeneration, SimpleCodeWithInclude) {
   cppgen::CodeUnit code;
   code.Add<cppgen::NewLine>();

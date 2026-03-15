@@ -108,12 +108,12 @@ inline CompileRunResult CompileAndRun(const std::string& cpp_source,
         if (!vcvarsall.empty()) {
             setup_cmd = "call " + quote_path(vcvarsall) + " x64";
         }
-        compile_cmd = quote_path(compiler) + " /EHsc /std:c++17 /Fe:" +
+        compile_cmd = quote_path(compiler) + " /EHsc /std:c++20 /Fe:" +
                       quote_path(exe_file.string()) + " " +
                       quote_path(src_file.string()) + " 2> " +
                       quote_path(compile_err_file.string());
     } else {
-        compile_cmd = quote_path(compiler) + " -std=c++17 -o " +
+        compile_cmd = quote_path(compiler) + " -std=c++20 -o " +
                       quote_path(exe_file.string()) + " " +
                       quote_path(src_file.string()) + " 2> " +
                       quote_path(compile_err_file.string());

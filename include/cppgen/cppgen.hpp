@@ -269,7 +269,6 @@ private:
   std::optional<InitializerList> m_array_initializer;
 };
 
-
 // --- Function ---
 class Function : public CodeBlock {
 public:
@@ -314,21 +313,80 @@ private:
   std::vector<ParameterDeclaration> m_parameters;
 };
 
+// --- EnumDecl ---
+// Scoped=true  → "enum class Name : Type { ... };"
+// Scoped=false → "enum Name : Type { ... };"
+// Emit is defined inline because template implementations must be
+// header-visible.
+template <bool Scoped = true>
+class EnumDecl : public CodeElement {
+public:
+  EnumDecl(const std::string &name) : m_name(name) {}
+  EnumDecl(const std::string &name, const std::string &underlying_type)
+      : m_name(name), m_underlying_type(underlying_type) {}
+  virtual ~EnumDecl() = default;
+
+  auto AddValue(const std::string &name) -> EnumDecl & {
+    m_values.emplace_back(name, std::nullopt);
+    return *this;
+  }
+  auto AddValue(const std::string &name, const std::string &value)
+      -> EnumDecl & {
+    m_values.emplace_back(name, std::optional<std::string>{value});
+    return *this;
+  }
+
+  auto Emit(CodeWriter &writer) -> std::string override {
+    std::string decl = Scoped ? "enum class " : "enum ";
+    decl += m_name;
+    if (m_underlying_type)
+      decl += " : " + *m_underlying_type;
+    decl += " {";
+    writer.WriteLine(decl);
+    writer.IdentIn();
+    for (size_t i = 0; i < m_values.size(); ++i) {
+      const auto &[vname, vval] = m_values[i];
+      std::string line = vname;
+      if (vval)
+        line += " = " + *vval;
+      if (i < m_values.size() - 1)
+        line += ",";
+      writer.WriteLine(line);
+    }
+    writer.IdentOut();
+    writer.WriteLine("}; // " + std::string(Scoped ? "enum class " : "enum ") +
+                     m_name);
+    return m_name;
+  }
+
+private:
+  std::string m_name;
+  std::optional<std::string> m_underlying_type;
+  std::vector<std::pair<std::string, std::optional<std::string>>> m_values;
+};
+
+using Enum = EnumDecl<false>;
+using EnumClass = EnumDecl<true>;
+
 // --- Access specifier ---
 enum class Access { Public, Private, Protected };
 
 // --- Class member types ---
 // All types valid as direct members of a struct/class.
-// Extend by adding new variant alternatives and is_class_member specialisations.
+// Extend by adding new variant alternatives and is_class_member
+// specialisations.
 using MemberVariant =
     std::variant<std::unique_ptr<Variable>, std::unique_ptr<ArrayVariable>,
-                 std::unique_ptr<Function>>;
+                 std::unique_ptr<Function>, std::unique_ptr<EnumDecl<true>>,
+                 std::unique_ptr<EnumDecl<false>>>;
 
 template <typename T>
 inline constexpr bool is_class_member_v =
     std::disjunction_v<std::is_same<T, Variable>,
                        std::is_same<T, ArrayVariable>,
-                       std::is_same<T, Function>>;
+                       std::is_same<T, Function>,
+                       std::is_same<T, EnumDecl<true>>,
+                       std::is_same<T, EnumDecl<false>>>;
 
 // --- MemberSection ---
 // A typed, optionally-labelled group of class/struct members.
@@ -573,15 +631,15 @@ inline auto AggregateType::Emit(CodeWriter &writer) -> std::string {
   for (auto &[access, section] : m_sections) {
     writer.IdentOut();
     switch (access) {
-    case Access::Public:
-      writer.WriteLine("public:");
-      break;
-    case Access::Private:
-      writer.WriteLine("private:");
-      break;
-    case Access::Protected:
-      writer.WriteLine("protected:");
-      break;
+      case Access::Public:
+        writer.WriteLine("public:");
+        break;
+      case Access::Private:
+        writer.WriteLine("private:");
+        break;
+      case Access::Protected:
+        writer.WriteLine("protected:");
+        break;
     }
     writer.IdentIn();
     section->Emit(writer);

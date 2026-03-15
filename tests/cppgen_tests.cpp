@@ -495,6 +495,71 @@ int main(int argc, char** argv)
   EXPECT_EQ(result.exit_code, 42);
 }
 
+TEST(BasicCodeGeneration, EnumClass) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  code.Add<cppgen::EnumClass>("BindingType", "uint32_t")
+      .AddValue("UniformBuffer", "0")
+      .AddValue("CombinedImageSampler", "1")
+      .AddValue("StorageBuffer");
+  auto result_str =
+      // clang-format off
+R"(
+enum class BindingType : uint32_t {
+  UniformBuffer = 0,
+  CombinedImageSampler = 1,
+  StorageBuffer
+}; // enum class BindingType
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, Enum) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  code.Add<cppgen::Enum>("Direction")
+      .AddValue("North")
+      .AddValue("East")
+      .AddValue("South")
+      .AddValue("West");
+  auto result_str =
+      // clang-format off
+R"(
+enum Direction {
+  North,
+  East,
+  South,
+  West
+}; // enum Direction
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, EnumClassAsClassMember) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  auto &cls = code.Add<cppgen::Class>("Shader");
+  cls.AddPublic()
+      .Add<cppgen::EnumClass>("Stage")
+      .AddValue("Vertex", "0")
+      .AddValue("Fragment", "1");
+  auto result_str =
+      // clang-format off
+R"(
+class Shader {
+public:
+  enum class Stage {
+    Vertex = 0,
+    Fragment = 1
+  }; // enum class Stage
+}; // class Shader
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
 TEST(BasicCodeGeneration, StructWithDefaultAddPreservesBackwardCompat) {
   cppgen::CodeUnit code;
   code.Add<cppgen::NewLine>();
@@ -581,4 +646,126 @@ private:
 )";
   // clang-format on
   EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+// =============================================================================
+// Integration tests — generate a full program, compile it, and run it.
+// =============================================================================
+
+// Generates, compiles and runs a program that uses an enum class and a
+// function dispatching on it.  Return value: 10 + 32 = 42.
+TEST(IntegrationTest, EnumClassAndFunction) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  code.Add<cppgen::Include>("cstdint");
+  code.Add<cppgen::NewLine>();
+  code.Add<cppgen::EnumClass>("Direction", "uint32_t")
+      .AddValue("North", "0")
+      .AddValue("East", "1")
+      .AddValue("South", "2")
+      .AddValue("West", "3");
+  code.Add<cppgen::NewLine>();
+  auto &steps_fn = code.Add<cppgen::Function>("int", "steps");
+  steps_fn.AddParameter("Direction", "d");
+  steps_fn.Add<cppgen::RawText>("switch (static_cast<uint32_t>(d)) {");
+  steps_fn.Add<cppgen::RawText>("case 0: return 10;");
+  steps_fn.Add<cppgen::RawText>("case 1: return 32;");
+  steps_fn.Add<cppgen::RawText>("default: return 0;");
+  steps_fn.Add<cppgen::RawText>("}");
+  code.Add<cppgen::NewLine>();
+  auto &main_fn = code.Add<cppgen::Function>("int", "main");
+  main_fn.Add<cppgen::RawText>(
+      "return steps(Direction::North) + steps(Direction::East);");
+
+  auto result = CompileAndRun(code.EmitCode(), CPPGEN_TEST_CXX);
+  ASSERT_TRUE(result.success) << "Compilation failed:\n"
+                              << result.stderr_output << "\nGenerated code:\n"
+                              << code.EmitCode();
+  EXPECT_EQ(result.exit_code, 42);
+}
+
+// Generates, compiles and runs a program that defines a class inside a
+// namespace and calls a method on it.  Return value: 3*6 + 4*6 = 42.
+TEST(IntegrationTest, ClassInNamespace) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  auto &ns = code.Add<cppgen::Namespace>("math");
+  auto &cls = ns.Add<cppgen::Class>("Vec2");
+
+  auto &dot = cls.AddPublic().Add<cppgen::Function>("int", "dot");
+  dot.AddParameter("int", "ox");
+  dot.AddParameter("int", "oy");
+  dot.Add<cppgen::RawText>("return m_x * ox + m_y * oy;");
+
+  auto &priv = cls.AddPrivate();
+  priv.Add<cppgen::Variable>("int", "m_x").SetInitializer("3");
+  priv.Add<cppgen::Variable>("int", "m_y").SetInitializer("4");
+
+  code.Add<cppgen::NewLine>();
+  auto &main_fn = code.Add<cppgen::Function>("int", "main");
+  main_fn.Add<cppgen::RawText>("math::Vec2 v;");
+  main_fn.Add<cppgen::RawText>("return v.dot(6, 6);");
+
+  auto result = CompileAndRun(code.EmitCode(), CPPGEN_TEST_CXX);
+  ASSERT_TRUE(result.success) << "Compilation failed:\n"
+                              << result.stderr_output << "\nGenerated code:\n"
+                              << code.EmitCode();
+  EXPECT_EQ(result.exit_code, 42);
+}
+
+// Generates, compiles and runs the shader binding-table use case that
+// motivated the library: enum class + struct + constexpr array with
+// designated initialisers.  Return value: kBindings[0].binding(20) +
+// kBindings[1].binding(22) = 42.
+TEST(IntegrationTest, BindingTable) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  code.Add<cppgen::Include>("cstdint");
+  code.Add<cppgen::NewLine>();
+
+  code.Add<cppgen::EnumClass>("BindingType", "uint32_t")
+      .AddValue("UniformBuffer", "0")
+      .AddValue("Sampler", "1");
+  code.Add<cppgen::NewLine>();
+
+  auto &binding_info = code.Add<cppgen::Struct>("BindingInfo");
+  binding_info.Add<cppgen::Variable>("uint32_t", "set");
+  binding_info.Add<cppgen::Variable>("uint32_t", "binding");
+  binding_info.Add<cppgen::Variable>("BindingType", "type");
+  binding_info.Add<cppgen::Variable>("uint32_t", "block_size");
+  code.Add<cppgen::NewLine>();
+
+  cppgen::InitializerList e0;
+  e0.SetCompact(true)
+      .AddValue("set", "0")
+      .AddValue("binding", "20")
+      .AddValue("type", "BindingType::UniformBuffer")
+      .AddValue("block_size", "64");
+
+  cppgen::InitializerList e1;
+  e1.SetCompact(true)
+      .AddValue("set", "0")
+      .AddValue("binding", "22")
+      .AddValue("type", "BindingType::Sampler")
+      .AddValue("block_size", "0");
+
+  cppgen::InitializerList entries;
+  entries.AddValue(std::move(e0));
+  entries.AddValue(std::move(e1));
+
+  code.Add<cppgen::ArrayVariable>("BindingInfo", "kBindings")
+      .AddSpecifier("static")
+      .AddSpecifier("constexpr")
+      .SetInitializer(std::move(entries));
+  code.Add<cppgen::NewLine>();
+
+  auto &main_fn = code.Add<cppgen::Function>("int", "main");
+  main_fn.Add<cppgen::RawText>(
+      "return static_cast<int>(kBindings[0].binding + kBindings[1].binding);");
+
+  auto result = CompileAndRun(code.EmitCode(), CPPGEN_TEST_CXX);
+  ASSERT_TRUE(result.success) << "Compilation failed:\n"
+                              << result.stderr_output << "\nGenerated code:\n"
+                              << code.EmitCode();
+  EXPECT_EQ(result.exit_code, 42);
 }

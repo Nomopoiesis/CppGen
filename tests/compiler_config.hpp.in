@@ -1,0 +1,2 @@
+#pragma once
+#define CPPGEN_TEST_CXX "@CPPGEN_COMPILER_PATH@"

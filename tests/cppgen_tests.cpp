@@ -143,6 +143,32 @@ int arr[];
   EXPECT_EQ(code.EmitCode(), result_str);
 }
 
+TEST(BasicCodeGeneration, ArrayVariableWithSize) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  code.Add<cppgen::ArrayVariable>("int", "arr", "10");
+  auto result_str =
+      // clang-format off
+R"(
+int arr[10];
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
+TEST(BasicCodeGeneration, ArrayVariableWithSizeSetSize) {
+  cppgen::CodeUnit code;
+  code.Add<cppgen::NewLine>();
+  code.Add<cppgen::ArrayVariable>("int", "buf").SetSize("N");
+  auto result_str =
+      // clang-format off
+R"(
+int buf[N];
+)";
+  // clang-format on
+  EXPECT_EQ(code.EmitCode(), result_str);
+}
+
 TEST(BasicCodeGeneration, ArrayVariableWithInitializerList) {
   cppgen::CodeUnit code;
   code.Add<cppgen::NewLine>();

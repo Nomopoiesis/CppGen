@@ -245,8 +245,9 @@ private:
 // --- ArrayVariable (derived from Variable) ---
 class ArrayVariable : public Variable {
 public:
-  ArrayVariable(const std::string &type, const std::string &name)
-      : Variable(type, name) {}
+  ArrayVariable(const std::string &type, const std::string &name,
+                std::optional<std::string> size = std::nullopt)
+      : Variable(type, name), m_array_size(std::move(size)) {}
   virtual ~ArrayVariable() = default;
   auto Emit(CodeWriter &writer) -> std::string override;
 
@@ -254,10 +255,15 @@ public:
     Variable::AddSpecifier(specifier);
     return *this;
   }
+  auto SetSize(std::string size) -> ArrayVariable & {
+    m_array_size = std::move(size);
+    return *this;
+  }
   auto SetInitializer(const std::string &initializer) -> ArrayVariable &;
   auto SetInitializer(InitializerList list) -> ArrayVariable &;
 
 private:
+  std::optional<std::string> m_array_size;
   std::optional<InitializerList> m_array_initializer;
 };
 
@@ -443,10 +449,14 @@ inline auto ArrayVariable::SetInitializer(InitializerList list)
 }
 
 inline auto ArrayVariable::Emit(CodeWriter &writer) -> std::string {
-  for (const auto &s : m_specifiers) {
-    writer.Write<false>(s + " ");
-  }
-  writer.Write<false>(m_type + " " + m_name + "[]");
+  std::string decl;
+  for (const auto &s : m_specifiers)
+    decl += s + " ";
+  decl += m_type + " " + m_name + "[";
+  if (m_array_size)
+    decl += *m_array_size;
+  decl += "]";
+  writer.Write(decl);
   if (m_array_initializer) {
     writer.Write<false>(" = ");
     m_array_initializer->Emit(writer);
